@@ -9,6 +9,12 @@
 #include <WiFiUdp.h>
 #include <DHT.h>
 
+// ==== Firebase ====
+#include <Firebase_ESP_Client.h>
+#include <addons/TokenHelper.h>
+#include <addons/RTDBHelper.h>
+
+// ==== ĐỊNH NGHĨA CHÂN VÀ BIẾN ====
 #define BUZZER_PIN 13
 #define SS_PIN 5  
 #define RST_PIN 0 
@@ -18,15 +24,15 @@
 #define DHT_TYPE DHT22
 #define BUTTON_PIN 15     
 #define TEMP_THRESHOLD 35.0
+
 DHT dht(DHT_PIN, DHT_TYPE);
 float temperature = 0;
 bool flameDetected = false;
 bool emergencyActive = false;
 
 // WiFi credentials
-const char* ssid = "HP Cafe Thong Nhat";
-const char* password_wifi = "xincamon";
-
+const char* ssid = "E2 308";
+const char* password_wifi = "123456789";
 
 WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP, "pool.ntp.org", 7 * 3600);  
@@ -62,6 +68,16 @@ MFRC522 rfid(SS_PIN, RST_PIN);
 #define TIME_SLOT_SIZE 4    
 
 byte ADMIN_UID[4] = {0xAE, 0x58, 0xF9, 0x04};
+
+// ==== Firebase objects ====
+FirebaseData fbdo;
+FirebaseAuth auth;
+FirebaseConfig config;
+
+String dbPath = "doorControl/state";
+int doorState = 0;
+
+// ================== Âm thanh ==================
 void beepSuccess() {
   tone(BUZZER_PIN, 2000, 200);
   delay(200);
@@ -85,6 +101,7 @@ void beepWrong() {
   }
 }
 
+// ================== Thời gian cho RFID ==================
 bool isWithinAllowedTime(int slotIndex = -1) {
     timeClient.update();
     int currentHour = timeClient.getHours();
@@ -113,6 +130,7 @@ bool isWithinAllowedTime(int slotIndex = -1) {
     }
 }
 
+// ================== EEPROM mật khẩu ==================
 void writeEpprom(char data[]) {
     unsigned char i = 0;
     for (i = 0; i < 5; i++) {
@@ -126,6 +144,8 @@ void readEpprom() {
         password[i] = EEPROM.read(i);
     }
 }
+
+// ================== Xử lý chuỗi nhập keypad ==================
 void clear_data_input() {
     int i = 0;
     for (i = 0; i < 6; i++) {
@@ -159,20 +179,33 @@ void insertData(char data1[], char data2[]) {
 void getData() {
     char key = keypad.getKey();
     if (key) {
+        // In ra serial giống code test
+        Serial.print("Nhan phim: ");
+        Serial.println(key);
+
         delay(100);
         if (in_num < 5) {
             data_input[in_num] = key;
+
+            // Hiển thị lên LCD
             int pass = 5 + in_num;
             lcd.setCursor(pass, 1);
             lcd.print(data_input[in_num]);
             delay(200);
             lcd.setCursor(pass, 1);
             lcd.print("*");
+
             in_num++;
         }
 
+        // Khi đủ 5 phím
         if (in_num == 5) {
-            Serial.println(data_input);
+            data_input[5] = '\0';          // kết thúc chuỗi để in cho chuẩn
+            Serial.print("Day 5 phim: ");
+            Serial.println(data_input);    // ví dụ: 12345
+
+            // Giữ nguyên data_input để các hàm khác dùng,
+            // chỉ reset biến đếm
             in_num = 0;
         }
     }
@@ -244,6 +277,7 @@ void checkPass() {
     }
 }
 
+// ================== Điều khiển cửa ==================
 void openDoor() {
     lcd.clear();
     lcd.setCursor(1, 0);
@@ -332,7 +366,7 @@ void changePass() {
     }
 }
 
-
+// ================== Nhập số 2 chữ số ==================
 unsigned char numberInput() {
     char number[5] = {0};
     char count_i = 0;
@@ -353,6 +387,7 @@ unsigned char numberInput() {
     return (number[0] - '0') * 10 + (number[1] - '0');
 }
 
+// ================== RFID ==================
 int findRFIDTag(byte tag[]) {
     for (int i = 0; i < 50; i++) {
         bool match = true;
@@ -380,6 +415,7 @@ int getRFIDTimeSlot(int rfidIndex) {
     int slotValue = EEPROM.read(210 + rfidIndex);
     return slotValue;
 }
+
 void rfidCheck() {
     if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
         byte rfidTag[4];
@@ -754,6 +790,7 @@ void delRFID() {
     error_pass = 0;
     index_t = 0;
 }
+
 void setRFIDTimeRestriction() {
   lcd.clear();
     lcd.setCursor(0, 0);
@@ -879,6 +916,8 @@ void setRFIDTimeRestriction() {
     lcd.clear();
     index_t = 0;
 }
+
+// ================== Kết nối WiFi + Firebase ==================
 void connectToWiFi() {
     lcd.clear();
     lcd.setCursor(0, 0);
@@ -903,7 +942,23 @@ void connectToWiFi() {
         
         timeClient.begin();
         timeClient.setTimeOffset(3600);
-        
+
+        // ===== Firebase setup sau khi WiFi OK =====
+        config.api_key = "AIzaSyAGysnplq9UVOHezxit2BDutIM2pvK0ocQ";
+        config.database_url = "https://doan2-dadd7-default-rtdb.firebaseio.com/";
+
+        // Đăng nhập ẩn
+        if (Firebase.signUp(&config, &auth, "", "")) {
+            Serial.println("Firebase SignUp OK");
+        } else {
+            Serial.printf("Firebase SignUp failed: %s\n",
+                          config.signer.signupError.message.c_str());
+        }
+
+        Firebase.begin(&config, &auth);
+        Firebase.reconnectWiFi(true);
+        // ==========================================
+
         delay(2000);
     } else {
         lcd.clear();
@@ -922,6 +977,8 @@ void updateNTP() {
         timeClient.update();
     }
 }
+
+// ================== Emergency: lửa / quá nhiệt ==================
 void checkEmergency() {
     float newTemp = dht.readTemperature();
     if (!isnan(newTemp)) temperature = newTemp;
@@ -948,6 +1005,33 @@ void checkEmergency() {
         index_t = 0;
     }
 }
+
+// ================== Đọc Firebase điều khiển cửa ==================
+void checkFirebaseDoor() {
+    // Nếu đang emergency thì không cho Firebase điều khiển
+    if (emergencyActive) return;
+    if (WiFi.status() != WL_CONNECTED) return;
+
+    if (Firebase.ready()) {
+        if (Firebase.RTDB.getInt(&fbdo, dbPath.c_str())) {
+            int state = fbdo.intData();
+            if (state != doorState) {
+                doorState = state;
+                if (doorState == 1) {
+                    Serial.println("Firebase: OPEN DOOR");
+                    digitalWrite(RELAY_PIN, HIGH);
+                } else {
+                    Serial.println("Firebase: CLOSE DOOR");
+                    digitalWrite(RELAY_PIN, LOW);
+                }
+            }
+        } else {
+            Serial.printf("Firebase getInt failed: %s\n", fbdo.errorReason().c_str());
+        }
+    }
+}
+
+// ================== setup & loop ==================
 void setup() {
     Serial.begin(9600);
     EEPROM.begin(512);
@@ -973,7 +1057,9 @@ void setup() {
 }
 
 void loop() {
-    checkEmergency();
+    checkEmergency();      // Ưu tiên an toàn
+    checkFirebaseDoor();   // Đọc lệnh mở/đóng từ Firebase
+
     if (!emergencyActive) {
         updateNTP();
 
