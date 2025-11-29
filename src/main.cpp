@@ -24,8 +24,8 @@ bool flameDetected = false;
 bool emergencyActive = false;
 
 // WiFi credentials
-const char* ssid = "HP Cafe Thong Nhat";
-const char* password_wifi = "xincamon";
+const char* ssid = "E2 308";
+const char* password_wifi = "123456789";
 
 
 WiFiUDP ntpUDP;
@@ -159,24 +159,38 @@ void insertData(char data1[], char data2[]) {
 void getData() {
     char key = keypad.getKey();
     if (key) {
+        // In ra serial giống code test
+        Serial.print("Nhan phim: ");
+        Serial.println(key);
+
         delay(100);
         if (in_num < 5) {
             data_input[in_num] = key;
+
+            // Hiển thị lên LCD
             int pass = 5 + in_num;
             lcd.setCursor(pass, 1);
             lcd.print(data_input[in_num]);
             delay(200);
             lcd.setCursor(pass, 1);
             lcd.print("*");
+
             in_num++;
         }
 
+        // Khi đủ 5 phím
         if (in_num == 5) {
-            Serial.println(data_input);
+            data_input[5] = '\0';          // kết thúc chuỗi để in cho chuẩn
+            Serial.print("Day 5 phim: ");
+            Serial.println(data_input);    // ví dụ: 12345
+
+            // Giữ nguyên data_input để các hàm khác dùng,
+            // chỉ reset biến đếm
             in_num = 0;
         }
     }
 }
+
 
 void Mode(int nextIndex) {
     lcd.clear();
