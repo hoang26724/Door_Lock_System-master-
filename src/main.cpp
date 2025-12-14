@@ -27,11 +27,32 @@
 
 DHT dht(DHT_PIN, DHT_TYPE);
 float temperature = 0;
+float humidity = 0;
+bool dhtHasData = false;
+
+unsigned long lastDhtReadMs = 0;
+const unsigned long DHT_READ_INTERVAL_MS = 2000; // DHT22 nên đọc >= 2s/lần
+
+unsigned long lastFirebaseDhtMs = 0;
+const unsigned long FIREBASE_DHT_INTERVAL_MS = 10000; // đẩy lên Firebase 5s/lần
+
+String tempPath = "sensors/temperature";
+String humPath  = "sensors/humidity";
+
 bool flameDetected = false;
 bool emergencyActive = false;
 
+// ====== LOOP TIMERS / UI STATE ======
+unsigned char last_index_t = 255;
+
+unsigned long lastNtpMs  = 0;
+unsigned long lastRfidMs = 0;
+
+const unsigned long NTP_INTERVAL_MS  = 15000; // 15 giây update NTP 1 lần
+const unsigned long RFID_INTERVAL_MS = 40;    // 40ms quét RFID 1 lần
+
 // WiFi credentials
-const char* ssid = "E2 308";
+const char* ssid = "OPPO";
 const char* password_wifi = "123456789";
 
 WiFiUDP ntpUDP;
@@ -45,10 +66,11 @@ unsigned char id_rf = 0, index_t = 0;
 const byte ROWS = 4; 
 const byte COLS = 4; 
 char hexaKeys[ROWS][COLS] = {
-    {'1', '2', '3', 'A'},
-    {'4', '5', '6', 'B'},
-    {'7', '8', '9', 'C'},
-    {'*', '0', '#', 'D'}};
+  {'D','C','B','A'},
+  {'#','9','6','3'},
+  {'0','8','5','2'},
+  {'*','7','4','1'}
+};
 byte rowPins[ROWS] = {12, 14, 27,26}; 
 byte colPins[COLS] = {25, 33, 32,17 }; 
 
@@ -67,7 +89,7 @@ MFRC522 rfid(SS_PIN, RST_PIN);
 #define TIME_SLOT_START (RFID_START_ADDR + 50 * 4)  
 #define TIME_SLOT_SIZE 4    
 
-byte ADMIN_UID[4] = {0xAE, 0x58, 0xF9, 0x04};
+byte ADMIN_UID[4] = {0xD2, 0x71, 0x38, 0x02};
 
 // ==== Firebase objects ====
 FirebaseData fbdo;
@@ -183,7 +205,7 @@ void getData() {
         Serial.print("Nhan phim: ");
         Serial.println(key);
 
-        delay(100);
+
         if (in_num < 5) {
             data_input[in_num] = key;
 
@@ -191,7 +213,7 @@ void getData() {
             int pass = 5 + in_num;
             lcd.setCursor(pass, 1);
             lcd.print(data_input[in_num]);
-            delay(200);
+
             lcd.setCursor(pass, 1);
             lcd.print("*");
 
@@ -210,6 +232,8 @@ void getData() {
         }
     }
 }
+
+
 
 void Mode(int nextIndex) {
     lcd.clear();
@@ -232,6 +256,9 @@ void Mode(int nextIndex) {
                 delay(1000);
                 lcd.clear();
                 index_t = 0;
+                last_index_t = 255;   // <-- thêm dòng này để loop vẽ lại
+                clear_data_input();
+                in_num = 0;
             }
             break;
         }
@@ -257,6 +284,7 @@ void checkPass() {
     else if (compareData(data_input, password)) {
         lcd.clear();
         clear_data_input();
+        in_num = 0;
         index_t = 3;
     } 
     else {
@@ -264,6 +292,7 @@ void checkPass() {
             clear_data_input();
             lcd.clear();
             index_t = 4;
+            return;
         }
         Serial.print("Error");
         lcd.clear();
@@ -274,6 +303,10 @@ void checkPass() {
         error_pass++;
         delay(1000);
         lcd.clear();
+        index_t = 0;
+        last_index_t = 255;
+        clear_data_input();
+        in_num = 0;
     }
 }
 
@@ -290,6 +323,8 @@ void openDoor() {
     lcd.init();  
     lcd.backlight();
     index_t = 0;
+    last_index_t = 255;
+
 }
 
 void error() {
@@ -533,7 +568,7 @@ void addRFID() {
             lcd.setCursor(0, 0);
             lcd.print("ADMIN CARD");
             lcd.setCursor(0, 1);
-            lcd.print("Pass:");
+            lcd.print("      ");
             bool passwordCorrect = false;
             clear_data_input();
             
@@ -980,8 +1015,7 @@ void updateNTP() {
 
 // ================== Emergency: lửa / quá nhiệt ==================
 void checkEmergency() {
-    float newTemp = dht.readTemperature();
-    if (!isnan(newTemp)) temperature = newTemp;
+    readDHTValues(); 
     bool fire = (digitalRead(FLAME_PIN) == LOW);
     bool overTemp = (temperature > TEMP_THRESHOLD);
 
@@ -1030,6 +1064,37 @@ void checkFirebaseDoor() {
         }
     }
 }
+void readDHTValues() {
+  if (millis() - lastDhtReadMs < DHT_READ_INTERVAL_MS) return;
+  lastDhtReadMs = millis();
+
+  float t = dht.readTemperature();
+  float h = dht.readHumidity();
+
+  if (!isnan(t)) temperature = t;
+  if (!isnan(h)) humidity = h;
+
+  if (!isnan(t) && !isnan(h)) dhtHasData = true;
+}
+
+void pushDHTToFirebase() {
+  if (WiFi.status() != WL_CONNECTED) return;
+  if (!Firebase.ready()) return;
+
+  if (millis() - lastFirebaseDhtMs < FIREBASE_DHT_INTERVAL_MS) return;
+  lastFirebaseDhtMs = millis();
+
+  readDHTValues();
+  if (!dhtHasData) return;
+
+  bool ok1 = Firebase.RTDB.setFloat(&fbdo, tempPath.c_str(), temperature);
+  bool ok2 = Firebase.RTDB.setFloat(&fbdo, humPath.c_str(),  humidity);
+
+  if (!ok1 || !ok2) {
+    Serial.printf("Firebase setFloat failed: %s\n", fbdo.errorReason().c_str());
+  }
+}
+
 
 // ================== setup & loop ==================
 void setup() {
@@ -1057,42 +1122,83 @@ void setup() {
 }
 
 void loop() {
-    checkEmergency();      // Ưu tiên an toàn
-    checkFirebaseDoor();   // Đọc lệnh mở/đóng từ Firebase
+    // Ưu tiên an toàn
+    checkEmergency();
+    pushDHTToFirebase();     
+    checkFirebaseDoor();
+    if (emergencyActive) return;
 
-    if (!emergencyActive) {
+    // Cập nhật NTP theo chu kỳ (không gọi liên tục)
+    if (millis() - lastNtpMs >= NTP_INTERVAL_MS) {
+        lastNtpMs = millis();
         updateNTP();
+    }
 
-        if (index_t == 0) {
-            lcd.setCursor(1, 0);
-            lcd.print("Enter Password");
+    // Nút mở cửa (giữ như bạn đang làm)
+    if (digitalRead(BUTTON_PIN) == LOW) {
+        index_t = 3;
+    }
+
+    // ====== Vẽ màn Enter Password chỉ 1 lần khi vừa vào index_t==0 ======
+    if (index_t == 0 && last_index_t != 0) {
+        last_index_t = 0;
+        lcd.clear();
+        lcd.setCursor(1, 0);
+        lcd.print("Enter Password");
+        lcd.setCursor(0, 1);
+        lcd.print("      ");
+        clear_data_input();
+        in_num = 0;   // reset input khi quay về màn nhập pass
+    }
+
+    // ====== State machine ======
+    switch (index_t) {
+        case 0:
+            // đọc keypad (nên dùng getData() đã bỏ delay)
             checkPass();
-            rfidCheck();
-        }
-        
-        if (digitalRead(BUTTON_PIN) == LOW) {  
-            index_t = 3;  
-        }
-        if (index_t == 1) {
+
+            // quét RFID theo chu kỳ để không “khựng” phím
+            if (millis() - lastRfidMs >= RFID_INTERVAL_MS) {
+                lastRfidMs = millis();
+                rfidCheck();
+            }
+            break;
+
+        case 1:
+            last_index_t = 1;
             changePass();
-        } 
-        else if (index_t == 3) {
+            break;
+
+        case 3:
+            last_index_t = 3;
             openDoor();
             error_pass = 0;
-        }
-        else if (index_t == 4) {
+            break;
+
+        case 4:
+            last_index_t = 4;
             error();
             error_pass = 0;
-        }
-        else if (index_t == 8) {
+            break;
+
+        case 8:
+            last_index_t = 8;
             addRFID();
-        }
-        else if (index_t == 9) {
+            break;
+
+        case 9:
+            last_index_t = 9;
             delRFID();
-        }
-        else if (index_t == 12) {
+            break;
+
+        case 12:
+            last_index_t = 12;
             setRFIDTimeRestriction();
-        }
+            break;
+
+        default:
+            last_index_t = index_t;
+            break;
     }
-    delay(100);
 }
+
