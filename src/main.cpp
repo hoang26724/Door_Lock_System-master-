@@ -25,6 +25,7 @@
 #define BUTTON_PIN 15     
 #define TEMP_THRESHOLD 35.0
 
+void readDHTValues();
 DHT dht(DHT_PIN, DHT_TYPE);
 float temperature = 0;
 float humidity = 0;
@@ -497,6 +498,11 @@ void rfidCheck() {
                 beepError();
                 delay(2000);
                 lcd.clear();
+                lcd.setCursor(1, 0);
+                lcd.print("Enter Password");
+                clear_data_input();
+                in_num = 0;
+
             }
         } else {
             if (error_pass == 2) {
@@ -511,6 +517,11 @@ void rfidCheck() {
             error_pass++;
             delay(1000);
             lcd.clear();
+            lcd.setCursor(1, 0);
+            lcd.print("Enter Password");
+            clear_data_input();
+            in_num = 0;
+
         }
         rfid.PICC_HaltA();
         rfid.PCD_StopCrypto1();
@@ -565,7 +576,7 @@ void addRFID() {
         
         if (id_rf == 1) {
             lcd.clear();
-            lcd.setCursor(0, 0);
+            lcd.setCursor(0, 0); 
             lcd.print("ADMIN CARD");
             lcd.setCursor(0, 1);
             lcd.print("      ");
@@ -1110,6 +1121,23 @@ void setup() {
     lcd.backlight();
     lcd.print("   SYSTEM INIT   ");
     readEpprom();
+
+// KIỂM TRA EEPROM TRỐNG
+    bool empty = true;
+    for (int i = 0; i < 5; i++) {
+     if (password[i] != 0xFF) {
+       empty = false;
+       break;
+     }
+    }
+
+if (empty) {
+  Serial.println("EEPROM EMPTY -> SET DEFAULT PASSWORD 12345");
+  char defaultPass[6] = "12345";
+  writeEpprom(defaultPass);
+  insertData(password, defaultPass);
+}
+
     dht.begin();
     pinMode(FLAME_PIN, INPUT);
     connectToWiFi();
